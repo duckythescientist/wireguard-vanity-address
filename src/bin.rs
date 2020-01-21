@@ -7,6 +7,7 @@ use regex::Regex;
 use clap::{App, AppSettings, Arg};
 use num_cpus;
 use rayon::prelude::*;
+use rayon::iter::repeat;
 use wireguard_vanity_lib::trial_regex;
 use wireguard_vanity_lib::trial_substring;
 
@@ -95,12 +96,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .setting(AppSettings::ArgRequiredElseHelp)
         .version("0.3.1")
         .author("Brian Warner <warner@lothar.com>")
-        .about("finds Wireguard keypairs with a given string prefix")
+        .about("finds Wireguard keypairs with a given substring/regex")
         .arg(
             Arg::with_name("RANGE")
                 .long("in")
                 .takes_value(true)
-                .help("NAME must be found within first RANGE chars of pubkey (default: 10)"),
+                .help("substring NAME must be found within first RANGE chars of pubkey (default: 10)"),
         )
         .arg(
             Arg::with_name("REGEX")
@@ -111,12 +112,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         .arg(
             Arg::with_name("NAME")
                 .required(true)
-                .help("string to find near the start of the pubkey"),
+                .help("substring or regex to find in the pubkey"),
         )
         .get_matches();
     let prefix = matches.value_of("NAME").unwrap().to_ascii_lowercase();
     let len = prefix.len();
     let is_regex = matches.is_present("REGEX");
+    let mut trials_per_key = 0;
     let end: usize = 44.min(match matches.value_of("RANGE") {
         Some(range) => range.parse()?,
         None => {
@@ -127,12 +129,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     });
-    if end < len {
-        return Err(ParseError(format!("range {} is too short for len={}", end, len)).into());
-    }
 
-    let mut trials_per_key = 0;
     if ! is_regex {
+        if end < len {
+            return Err(ParseError(format!("range {} is too short for len={}", end, len)).into());
+        }
         let offsets: u64 = 44.min((1 + end - len) as u64);
         // todo: this is an approximation, offsets=2 != double the chances
         let mut num = offsets;
@@ -182,12 +183,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     if is_regex {
         let re = Regex::new(&prefix).unwrap();
-        // 1M trials takes about 10s on my laptop, so let it run for 1000s
-        (0..100_000_000)
-            .into_par_iter()
+        // Run forever
+        let result = repeat(true)
             .map(|_| trial_regex(&re))
-            .filter_map(|r| r)
-            .try_for_each(print)?;
+            .find_any(|r| r.is_some())
+            .unwrap()
+            .unwrap();
+        print(result)?;
     }
     else {
         // 1M trials takes about 10s on my laptop, so let it run for 1000s
